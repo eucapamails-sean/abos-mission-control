@@ -67,8 +67,28 @@
   <!-- Mobile Overlay -->
   <div class="mobile-overlay" id="mobile-overlay" onclick="toggleMobileSidebar()"></div>
   
-  <!-- Scripts (order matters: agents -> memory -> app) -->
+  <!-- Streaming cursor animation -->
+  <style>
+    .streaming-cursor {
+      display: inline-block;
+      width: 6px;
+      height: 14px;
+      background: var(--color-primary);
+      border-radius: 1px;
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      animation: cursor-blink 0.8s ease-in-out infinite;
+    }
+    @keyframes cursor-blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+  </style>
+  
+  <!-- Scripts (order matters: agents -> system-prompts -> openrouter -> memory -> app) -->
   <script src="./agents.js"></script>
+  <script src="./system-prompts.js"></script>
+  <script src="./openrouter.js"></script>
   <script src="./memory.js"></script>
   <script src="./app.js"></script>
 </body>
