@@ -1,4 +1,6 @@
-// memory.js — ABOS Memory & Conversation Storage System
+// memory.js — ABOS Memory & Conversation Storage System (CGI-bin backed)
+
+const CGI_BIN = '__CGI_BIN__';
 
 const MemoryStore = {
   // Per-agent memory stores
@@ -11,26 +13,238 @@ const MemoryStore = {
   activityFeed: [],
   // Current session IDs per agent
   currentSessions: {},
+  // Settings cache
+  settings: {},
+  // Initialization state
+  _initialized: false,
+  _initPromise: null,
 
-  init() {
-    // Initialize memory and conversations for all agents
+  async init() {
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this._doInit();
+    return this._initPromise;
+  },
+
+  async _doInit() {
+    // Initialize local structures for all agents
     AgentDefs.forEach(agent => {
-      this.memories[agent.id] = agent.initialMemory || [];
+      this.memories[agent.id] = [];
       this.conversations[agent.id] = {};
       this.sessions[agent.id] = [];
-      
-      // Create initial session with pre-loaded conversations
-      const sessionId = this.createSession(agent.id, agent.initialSessionTitle || 'Session 1');
+    });
+
+    // Seed local defaults first (instant render)
+    this._seedDefaultsLocal();
+    this.activityFeed = generateInitialActivity();
+    this._initialized = true;
+
+    // Then try backend load
+    await this._loadFromBackend();
+  },
+
+  async _loadFromBackend() {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const [settingsData, memoryData] = await Promise.all([
+        this._fetchAPI('/settings').catch(() => null),
+        this._fetchAPI('/memory').catch(() => null)
+      ]);
+      clearTimeout(timeout);
+
+      // Load settings
+      if (settingsData && typeof settingsData === 'object' && !settingsData.error) {
+        this.settings = settingsData;
+      }
+
+      // Load memories — replace local defaults if backend has data
+      if (Array.isArray(memoryData) && memoryData.length > 0) {
+        // Clear local defaults first
+        AgentDefs.forEach(agent => { this.memories[agent.id] = []; });
+        memoryData.forEach(m => {
+          const agentId = m.agent_id;
+          if (!this.memories[agentId]) this.memories[agentId] = [];
+          this.memories[agentId].push({
+            id: m.id,
+            key: m.key,
+            value: m.value,
+            timestamp: m.created_at,
+            agentId: agentId
+          });
+        });
+      }
+
+      // Load sessions and conversations for each agent
+      const sessionPromises = AgentDefs.map(agent => this._loadAgentSessions(agent.id));
+      await Promise.all(sessionPromises);
+
+      // Check if backend had session data; if so it replaced defaults
+      // If backend was empty, seed defaults to backend
+      const hasBackendSessions = AgentDefs.some(a => {
+        const sessions = this.sessions[a.id];
+        return sessions.length > 0 && sessions[0]._fromBackend;
+      });
+      if (!hasBackendSessions) {
+        // Backend is empty — push local defaults
+        await this._seedDefaults();
+      }
+    } catch (err) {
+      console.warn('Backend unavailable, using in-memory defaults:', err.message);
+    }
+  },
+
+  async _loadAgentSessions(agentId) {
+    try {
+      const sessionsData = await this._fetchAPI(`/sessions?agent_id=${encodeURIComponent(agentId)}`);
+      if (Array.isArray(sessionsData) && sessionsData.length > 0) {
+        this.sessions[agentId] = sessionsData.map(s => ({
+          id: s.id,
+          title: s.title,
+          createdAt: s.created_at,
+          messageCount: s.message_count || 0,
+          _fromBackend: true
+        }));
+
+        // Set current session to the most recent
+        this.currentSessions[agentId] = this.sessions[agentId][0].id;
+
+        // Clear local conversations and load from backend
+        this.conversations[agentId] = {};
+        for (const session of this.sessions[agentId]) {
+          const msgs = await this._fetchAPI(`/conversations?agent_id=${encodeURIComponent(agentId)}&session_id=${encodeURIComponent(session.id)}`).catch(() => []);
+          if (Array.isArray(msgs)) {
+            this.conversations[agentId][session.id] = msgs.map(m => ({
+              id: m.id?.toString() || ('msg-' + Date.now() + Math.random().toString(36).slice(2,6)),
+              role: m.role,
+              content: m.content,
+              timestamp: m.created_at
+            }));
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to load sessions for ${agentId}:`, err.message);
+    }
+  },
+
+  // Seed demo data into the backend (push existing local data)
+  async _seedDefaults() {
+    // Bulk seed to backend
+    const bulkData = { sessions: [], conversations: [], memories: [] };
+
+    AgentDefs.forEach(agent => {
+      const sessions = this.sessions[agent.id] || [];
+      sessions.forEach(s => {
+        bulkData.sessions.push({
+          id: s.id,
+          agent_id: agent.id,
+          title: s.title,
+          message_count: s.messageCount || 0,
+          created_at: s.createdAt
+        });
+      });
+
+      Object.keys(this.conversations[agent.id] || {}).forEach(sessionId => {
+        const msgs = this.conversations[agent.id][sessionId] || [];
+        msgs.forEach(m => {
+          bulkData.conversations.push({
+            agent_id: agent.id,
+            session_id: sessionId,
+            role: m.role,
+            content: m.content,
+            created_at: m.timestamp
+          });
+        });
+      });
+
+      (this.memories[agent.id] || []).forEach(m => {
+        bulkData.memories.push({
+          id: m.id,
+          agent_id: agent.id,
+          key: m.key,
+          value: m.value,
+          created_at: m.timestamp
+        });
+      });
+    });
+
+    try {
+      await this._fetchAPI('/bulk-seed', 'POST', bulkData);
+    } catch (err) {
+      console.warn('Failed to seed backend:', err.message);
+    }
+  },
+
+  // Local-only default seeding (same as original init)
+  _seedDefaultsLocal() {
+    AgentDefs.forEach(agent => {
+      this.memories[agent.id] = (agent.initialMemory || []).map(m => ({
+        ...m,
+        agentId: agent.id,
+        timestamp: m.timestamp || new Date().toISOString()
+      }));
+      this.conversations[agent.id] = {};
+      this.sessions[agent.id] = [];
+
+      const sessionId = this._createSessionLocal(agent.id, agent.initialSessionTitle || 'Session 1');
       if (agent.initialConversation) {
         this.conversations[agent.id][sessionId] = agent.initialConversation.map(msg => ({
           ...msg,
+          id: 'msg-' + Date.now() + Math.random().toString(36).slice(2,6),
           timestamp: new Date(Date.now() - Math.random() * 3600000).toISOString()
         }));
       }
     });
-    
-    // Pre-populate activity feed
-    this.activityFeed = generateInitialActivity();
+  },
+
+  _createSessionLocal(agentId, title) {
+    const sessionId = 's-' + Date.now() + Math.random().toString(36).slice(2,6);
+    if (!this.sessions[agentId]) this.sessions[agentId] = [];
+    this.sessions[agentId].unshift({
+      id: sessionId,
+      title: title || `Session ${this.sessions[agentId].length + 1}`,
+      createdAt: new Date().toISOString(),
+      messageCount: 0
+    });
+    this.conversations[agentId][sessionId] = [];
+    this.currentSessions[agentId] = sessionId;
+    return sessionId;
+  },
+
+  // ---- API helpers ----
+  async _fetchAPI(path, method = 'GET', body = null) {
+    const opts = {
+      method,
+      headers: { 'Content-Type': 'application/json' }
+    };
+    if (body && method !== 'GET') {
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(`${CGI_BIN}/api.py${path}`, opts);
+    return res.json();
+  },
+
+  // ---- Settings ----
+  async loadSettings() {
+    try {
+      const data = await this._fetchAPI('/settings');
+      if (data && typeof data === 'object' && !data.error) {
+        this.settings = data;
+      }
+    } catch (err) {
+      console.warn('Failed to load settings:', err.message);
+    }
+    return this.settings;
+  },
+
+  async saveSettings(settingsObj) {
+    this.settings = { ...this.settings, ...settingsObj };
+    try {
+      await this._fetchAPI('/settings', 'POST', settingsObj);
+    } catch (err) {
+      console.warn('Failed to save settings:', err.message);
+    }
   },
 
   // Memory CRUD
@@ -45,6 +259,10 @@ const MemoryStore = {
     };
     this.memories[agentId].unshift(entry);
     this.addActivity(agentId, 'memory', `Stored: "${key}"`, 'success');
+
+    // Async write to backend
+    this._fetchAPI('/memory', 'POST', { id: entry.id, agentId, key, value }).catch(() => {});
+
     return entry;
   },
 
@@ -54,6 +272,9 @@ const MemoryStore = {
       mem.key = key;
       mem.value = value;
       mem.timestamp = new Date().toISOString();
+
+      // Async write to backend
+      this._fetchAPI('/memory', 'PUT', { id: memoryId, key, value }).catch(() => {});
     }
     return mem;
   },
@@ -61,6 +282,9 @@ const MemoryStore = {
   deleteMemory(agentId, memoryId) {
     if (this.memories[agentId]) {
       this.memories[agentId] = this.memories[agentId].filter(m => m.id !== memoryId);
+
+      // Async delete from backend
+      this._fetchAPI(`/memory?id=${encodeURIComponent(memoryId)}`, 'DELETE').catch(() => {});
     }
   },
 
@@ -80,14 +304,19 @@ const MemoryStore = {
   createSession(agentId, title) {
     const sessionId = 's-' + Date.now() + Math.random().toString(36).slice(2,6);
     if (!this.sessions[agentId]) this.sessions[agentId] = [];
-    this.sessions[agentId].unshift({
+    const sessionObj = {
       id: sessionId,
       title: title || `Session ${this.sessions[agentId].length + 1}`,
       createdAt: new Date().toISOString(),
       messageCount: 0
-    });
+    };
+    this.sessions[agentId].unshift(sessionObj);
     this.conversations[agentId][sessionId] = [];
     this.currentSessions[agentId] = sessionId;
+
+    // Async write to backend
+    this._fetchAPI('/sessions', 'POST', { id: sessionId, agentId, title: sessionObj.title }).catch(() => {});
+
     return sessionId;
   },
 
@@ -117,6 +346,14 @@ const MemoryStore = {
     // Update session message count
     const session = this.sessions[agentId]?.find(s => s.id === sessionId);
     if (session) session.messageCount++;
+
+    // Async write to backend
+    this._fetchAPI('/conversations', 'POST', {
+      agentId,
+      sessionId,
+      role,
+      content
+    }).catch(() => {});
     
     return msg;
   },
