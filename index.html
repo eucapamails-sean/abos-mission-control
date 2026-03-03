@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ABOS — Autonomous Business Operating System</title>
+  <meta name="description" content="AI-powered platform with 14 specialized agents for running businesses autonomously.">
+  
+  <!-- Preconnect -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="./base.css">
+  <link rel="stylesheet" href="./style.css">
+  
+  <!-- CDN Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.0/marked.min.js" defer></script>
+  
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><path d='M24 2L43.6 13V35L24 46L4.4 35V13Z' fill='%2300d4aa'/></svg>">
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <!-- Populated by JS -->
+    </aside>
+    
+    <!-- Header -->
+    <header class="header">
+      <button class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Toggle menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+      
+      <div class="header-search">
+        <span class="header-search-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </span>
+        <input type="text" placeholder="Search agents, memories, actions... (⌘K)" aria-label="Search">
+      </div>
+      
+      <div class="header-right">
+        <select class="header-model-select" aria-label="Active model">
+          <option>claude-3.5-sonnet</option>
+          <option>gpt-4o</option>
+          <option>gemini-2.0-flash</option>
+          <option>deepseek-v3</option>
+        </select>
+        
+        <button class="header-btn" aria-label="Notifications" onclick="showToast('No new notifications', 'info')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="notification-badge"></span>
+        </button>
+        
+        <div class="header-avatar" title="ABOS Admin">AB</div>
+      </div>
+    </header>
+    
+    <!-- Main Content -->
+    <main class="main" id="main-content">
+      <!-- Populated by JS routing -->
+    </main>
+  </div>
+  
+  <!-- Mobile Overlay -->
+  <div class="mobile-overlay" id="mobile-overlay" onclick="toggleMobileSidebar()"></div>
+  
+  <!-- Scripts (order matters: agents -> memory -> app) -->
+  <script src="./agents.js"></script>
+  <script src="./memory.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
